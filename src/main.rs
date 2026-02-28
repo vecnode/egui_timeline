@@ -328,6 +328,7 @@ impl eframe::App for TimelineApp {
                     Some(self as &dyn TrackSelectionApi),
                 )
                 .playhead(ui, self, Playhead::new())
+                .top_panel_time(ui, Some(self as &dyn PlayheadApi))
                 .bottom_bar(ui, &mut self.global_panel_visible);
 
             ui.add_space(10.0);

@@ -37,6 +37,8 @@ pub struct SetPlayhead {
     tracks_bottom: f32,
     /// The bottom bar rectangle (20px height at the bottom).
     pub(crate) bottom_bar_rect: Option<Rect>,
+    /// The top panel rectangle (40px height at the top).
+    pub(crate) top_panel_rect: Option<Rect>,
 }
 
 /// Relevant information for displaying a background for the timeline.
@@ -249,6 +251,7 @@ impl SetPlayhead {
             timeline_rect,
             tracks_bottom,
             bottom_bar_rect: None,
+            top_panel_rect: None,
         }
     }
 

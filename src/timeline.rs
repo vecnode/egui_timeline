@@ -17,6 +17,7 @@ pub struct Show {
     tracks: TracksCtx,
     ui: egui::Ui,
     bottom_bar_rect: Option<egui::Rect>,
+    top_panel_rect: Option<egui::Rect>,
 }
 
 impl Timeline {
@@ -39,12 +40,20 @@ impl Timeline {
         // The full area including both headers and timeline.
         let full_rect = ui.available_rect_before_wrap();
         
-        // Reserve 20px at the bottom for the bottom bar
+        // Reserve 40px at the top for the top panel and 20px at the bottom for the bottom bar
+        const TOP_PANEL_HEIGHT: f32 = 40.0;
         const BOTTOM_BAR_HEIGHT: f32 = 20.0;
         let mut content_rect = full_rect;
-        content_rect.set_height(full_rect.height() - BOTTOM_BAR_HEIGHT);
+        content_rect.min.y += TOP_PANEL_HEIGHT;
+        content_rect.set_height(full_rect.height() - TOP_PANEL_HEIGHT - BOTTOM_BAR_HEIGHT);
         
-        // The area occupied by the timeline (excluding bottom bar).
+        // Top panel area (40px height, full width)
+        let top_panel_rect = egui::Rect::from_min_max(
+            egui::Pos2::new(full_rect.min.x, full_rect.min.y),
+            egui::Pos2::new(full_rect.max.x, full_rect.min.y + TOP_PANEL_HEIGHT),
+        );
+        
+        // The area occupied by the timeline (excluding top panel and bottom bar).
         let mut timeline_rect = content_rect;
         // The area occupied by track headers.
         let header_rect = self.header.map(|header_w| {
@@ -71,13 +80,17 @@ impl Timeline {
         };
         ui.painter().rect(full_rect, 0.0, vis.bg_fill, bg_stroke);
 
-        // Draw a 1px green border around the entire timeline widget (including header column and bottom bar)
+        // Draw top panel background (no border)
+        let vis = ui.style().noninteractive();
+        ui.painter().rect(top_panel_rect, 0.0, vis.bg_fill, vis.bg_stroke);
+        
+        // Draw a 1px green border around the entire timeline widget (including header column, top panel, and bottom bar)
         // to visualize the complete viewport
         let green_border = egui::Stroke {
             width: 1.0,
             color: egui::Color32::from_rgb(0, 255, 0),
         };
-        // full_rect includes the bottom bar area, so the border will encompass everything
+        // full_rect includes the top panel and bottom bar area, so the border will encompass everything
         ui.painter().rect_stroke(full_rect, 0.0, green_border);
 
         // The child widgets (content area, excluding bottom bar).
@@ -87,7 +100,7 @@ impl Timeline {
         let timeline_ctx = TimelineCtx::new(timeline_rect, visible_ticks);
         let tracks = TracksCtx::new(content_rect, header_rect, timeline_ctx);
         let ui = ui.new_child(egui::UiBuilder::new().max_rect(content_rect).layout(layout));
-        Show { tracks, ui, bottom_bar_rect: Some(bottom_bar_rect) }
+        Show { tracks, ui, bottom_bar_rect: Some(bottom_bar_rect), top_panel_rect: Some(top_panel_rect) }
     }
 }
 
@@ -100,6 +113,7 @@ impl Show {
             ref mut ui,
             ref tracks,
             bottom_bar_rect: _,
+            top_panel_rect: _,
         } = self;
         let bg = BackgroundCtx {
             header_full_rect: tracks.header_full_rect,
@@ -125,6 +139,7 @@ impl Show {
             ref mut ui,
             ref tracks,
             bottom_bar_rect: _,
+            top_panel_rect: _,
         } = self;
 
         // Use no spacing by default so we can get exact position for line separator.
@@ -164,6 +179,7 @@ impl Show {
             ref mut ui,
             ref tracks,
             bottom_bar_rect,
+            top_panel_rect: _,
         } = self;
         let rect = ui.available_rect_before_wrap();
         let enable_scrolling = !ui.input(|i| i.modifiers.ctrl);
@@ -182,6 +198,7 @@ impl Show {
             .min(res.inner_rect.top() + res.content_size.y);
         let mut set_playhead = SetPlayhead::new(timeline_rect, tracks_bottom);
         set_playhead.bottom_bar_rect = bottom_bar_rect;
+        set_playhead.top_panel_rect = self.top_panel_rect;
         set_playhead
     }
 }
@@ -195,6 +212,56 @@ impl SetPlayhead {
         playhead: crate::playhead::Playhead,
     ) -> &Self {
         crate::playhead::set(ui, info, self.timeline_rect(), self.tracks_bottom(), playhead);
+        self
+    }
+
+    /// Display time in the top panel.
+    /// 
+    /// `playhead_api` should provide access to the current playhead position.
+    pub fn top_panel_time(&self, ui: &mut egui::Ui, playhead_api: Option<&dyn crate::playhead::PlayheadApi>) -> &Self {
+        if let Some(top_panel_rect) = self.top_panel_rect {
+            // Create UI for top panel to display time
+            let mut top_panel_ui = ui.new_child(
+                egui::UiBuilder::new()
+                    .max_rect(top_panel_rect)
+                    .layout(egui::Layout::top_down(egui::Align::Min)),
+            );
+            
+            // Display time in top right corner
+            top_panel_ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if let Some(api) = playhead_api {
+                    // Get current playhead position in ticks (absolute from timeline start at 0)
+                    // playhead_ticks() returns relative ticks from timeline start (scroll position)
+                    // We need the absolute position from the beginning of the timeline (tick 0)
+                    let playhead_ticks_relative = api.playhead_ticks();
+                    // Get timeline_start from MusicalInfo trait (this is the scroll offset)
+                    let timeline_start = api.timeline_start().unwrap_or(0.0);
+                    // Absolute playhead position from the beginning of the timeline
+                    let absolute_playhead_ticks = timeline_start + playhead_ticks_relative;
+                    
+                    // Convert ticks to time based on bars
+                    // Each bar should be 1 second, so calculate which bar we're in and the fraction within that bar
+                    let ticks_per_beat = api.ticks_per_beat() as f32;
+                    // 4/4 time signature = 4 beats per bar
+                    const BEATS_PER_BAR: f32 = 4.0;
+                    let ticks_per_bar = ticks_per_beat * BEATS_PER_BAR;
+                    
+                    // Calculate which bar we're in and the fraction within that bar
+                    let bar_number = absolute_playhead_ticks / ticks_per_bar;
+                    let total_seconds = bar_number; // Each bar = 1 second
+                    
+                    let minutes = (total_seconds / 60.0).floor() as u32;
+                    let seconds = (total_seconds % 60.0).floor() as u32;
+                    let centiseconds = ((total_seconds % 1.0) * 100.0).floor() as u32;
+                    
+                    let time_string = format!("{:02}:{:02}:{:02}", minutes, seconds, centiseconds);
+                    ui.label(time_string);
+                } else {
+                    // Fallback if no playhead API
+                    ui.label("00:00:00");
+                }
+            });
+        }
         self
     }
 
@@ -242,8 +309,57 @@ impl SetPlayhead {
                         .layout(egui::Layout::top_down(egui::Align::Min)),
                 );
                 
-                // Panel content can be added here
-                panel_ui.label("Global Panel");
+                // Divide panel into 6 columns
+                panel_ui.horizontal(|ui| {
+                    // Column 1: "Global Panel" label
+                    ui.vertical(|ui| {
+                        ui.set_width(panel_rect.width() / 6.0);
+                        ui.label("Global Panel");
+                    });
+                    
+                    // Column 2: Available for widgets
+                    ui.vertical(|ui| {
+                        ui.set_width(panel_rect.width() / 6.0);
+                        // Add widgets here
+                    });
+                    
+                    // Column 3: Available for widgets
+                    ui.vertical(|ui| {
+                        ui.set_width(panel_rect.width() / 6.0);
+                        // Add widgets here
+                    });
+                    
+                    // Column 4: Available for widgets
+                    ui.vertical(|ui| {
+                        ui.set_width(panel_rect.width() / 6.0);
+                        // Add widgets here
+                    });
+                    
+                    // Column 5: Available for widgets
+                    ui.vertical(|ui| {
+                        ui.set_width(panel_rect.width() / 6.0);
+                        // Add widgets here
+                    });
+                    
+                    // Column 6: Available for widgets
+                    ui.vertical(|ui| {
+                        ui.set_width(panel_rect.width() / 6.0);
+                        // Add widgets here
+                    });
+                });
+                
+                // Draw 1px grey vertical borders between columns (100% height)
+                let grey_border = egui::Stroke {
+                    width: 1.0,
+                    color: egui::Color32::from_rgb(128, 128, 128), // Grey
+                };
+                let column_width = panel_rect.width() / 6.0;
+                for i in 1..6 {
+                    let x = panel_rect.min.x + (column_width * i as f32);
+                    let top = egui::Pos2::new(x, panel_rect.min.y);
+                    let bottom = egui::Pos2::new(x, panel_rect.max.y);
+                    ui.painter().line_segment([top, bottom], grey_border);
+                }
             }
         }
     }
