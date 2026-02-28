@@ -27,7 +27,11 @@ mod timeline_api {
     pub trait TimelineApi {
         /// Access to the ruler info.
         fn musical_ruler_info(&self) -> &dyn ruler::MusicalInfo;
+        /// Get the current timeline start position in ticks.
+        /// This should return 0.0 or greater - negative values are not allowed.
+        fn timeline_start(&self) -> f32;
         /// Shift the timeline start by the given number of ticks due to a scroll event.
+        /// The implementation should clamp the result to ensure it never goes below 0.0.
         fn shift_timeline_start(&mut self, ticks: f32);
         /// The timeline was scrolled with with `Ctrl` held down to zoom in/out.
         fn zoom(&mut self, y_delta: f32);

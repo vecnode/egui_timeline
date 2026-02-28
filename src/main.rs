@@ -22,6 +22,18 @@ struct TimelineApp {
     zoom_level: f32,
     playhead_pos: f32,
     ticks_per_beat: u32,
+    global_panel_visible: bool,
+}
+
+impl TimelineApp {
+    /// Total number of bars (0-500 inclusive = 501 bars)
+    const TOTAL_BARS: u32 = 501;
+    
+    /// Calculate ticks per bar
+    fn ticks_per_bar(&self) -> f32 {
+        let beats_per_bar = 4.0; // 4/4 time signature
+        self.ticks_per_beat as f32 * beats_per_bar
+    }
 }
 
 impl Default for TimelineApp {
@@ -31,6 +43,7 @@ impl Default for TimelineApp {
             zoom_level: 1.0,
             playhead_pos: 0.0,
             ticks_per_beat: 960, // Standard MIDI PPQN
+            global_panel_visible: false,
         }
     }
 }
@@ -40,7 +53,13 @@ impl TimelineApi for TimelineApp {
         self
     }
 
+    fn timeline_start(&self) -> f32 {
+        self.timeline_start
+    }
+
     fn shift_timeline_start(&mut self, ticks: f32) {
+        // Apply the shift - clamping is handled in the interaction handler
+        // where we have access to the visible width to calculate proper max
         self.timeline_start += ticks;
     }
 
@@ -54,11 +73,18 @@ impl MusicalInfo for TimelineApp {
         self.ticks_per_beat
     }
 
+    fn timeline_start(&self) -> Option<f32> {
+        Some(self.timeline_start)
+    }
+
     fn bar_at_ticks(&self, tick: f32) -> Bar {
         let absolute_tick = self.timeline_start + tick;
-        let beats_per_bar = 4.0; // 4/4 time signature
-        let ticks_per_bar = self.ticks_per_beat as f32 * beats_per_bar;
-        let bar_number = (absolute_tick / ticks_per_bar).floor() as u32;
+        let ticks_per_bar = self.ticks_per_bar();
+        let mut bar_number = (absolute_tick / ticks_per_bar).floor() as u32;
+        
+        // Clamp bar number to 0-500
+        bar_number = bar_number.min(Self::TOTAL_BARS - 1);
+        
         let bar_start = bar_number as f32 * ticks_per_bar;
         let bar_end = bar_start + ticks_per_bar;
         Bar {
@@ -166,7 +192,8 @@ impl eframe::App for TimelineApp {
                         });
                     });
                 }, Some(self))
-                .playhead(ui, self, Playhead::new());
+                .playhead(ui, self, Playhead::new())
+                .bottom_bar(ui, &mut self.global_panel_visible);
 
             ui.add_space(10.0);
             ui.separator();
