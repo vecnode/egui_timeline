@@ -9,7 +9,7 @@ pub trait Info: MusicalInfo {
 /// For handling interaction with the playhead.
 pub trait Interaction {
     /// Set the location of the playhead in ticks.
-    fn set_playhead_ticks(&mut self, ticks: f32);
+    fn set_playhead_ticks(&self, ticks: f32);
 }
 
 /// For both providing info and handling interaction.
@@ -78,7 +78,7 @@ impl<T> PlayheadApi for T where T: Info + Interaction {}
 /// Set the playhead widget - a thin line for indicating progress through the timeline.
 pub fn set(
     ui: &mut egui::Ui,
-    api: &mut dyn PlayheadApi,
+    api: &dyn PlayheadApi,
     timeline_rect: egui::Rect,
     tracks_bottom: f32,
     playhead: Playhead,

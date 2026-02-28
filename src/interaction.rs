@@ -8,6 +8,7 @@ pub fn handle_scroll_and_zoom(
 ) {
     if ui.rect_contains_pointer(timeline_rect) {
         let ctrl_pressed = ui.input(|i| i.modifiers.ctrl);
+        let shift_pressed = ui.input(|i| i.modifiers.shift);
         let smooth_delta = ui.input(|i| i.smooth_scroll_delta);
         let raw_delta = ui.input(|i| i.raw_scroll_delta);
         // When Ctrl is pressed, prefer raw_delta for more immediate response
@@ -29,17 +30,32 @@ pub fn handle_scroll_and_zoom(
             if delta.x != 0.0 || delta.y != 0.0 {
                 timeline_api.zoom(delta.y - delta.x);
             }
-        } else {
+        } else if shift_pressed || delta.x != 0.0 {
+            // Handle horizontal scrolling (with or without shift modifier)
             if delta.x != 0.0 {
                 let ticks_per_point = timeline_api.musical_ruler_info().ticks_per_point();
+                let timeline_width = timeline_rect.width();
+                let visible_ticks = ticks_per_point * timeline_width;
+                
+                // Calculate the maximum timeline_start so that bar 500 is glued to the right edge
+                // Total bars: 501 (0-500 inclusive)
+                // ticks_per_bar = ticks_per_beat * 4 (for 4/4 time signature)
+                let ticks_per_bar = timeline_api.musical_ruler_info().ticks_per_beat() as f32 * 4.0;
+                let total_ticks = 501.0 * ticks_per_bar; // 501 bars (0-500 inclusive)
+                let max_timeline_start = (total_ticks - visible_ticks).max(0.0);
+                
                 let shift_amount = delta.x * ticks_per_point;
                 let current_start = timeline_api.timeline_start();
-                // Only allow scrolling right (positive shift) or scrolling left (negative shift)
-                // but clamp to prevent timeline_start from going below 0
-                let new_start = (current_start + shift_amount).max(0.0);
-                let actual_shift = new_start - current_start;
-                if actual_shift != 0.0 {
-                    timeline_api.shift_timeline_start(actual_shift);
+                let mut new_start = current_start + shift_amount;
+                
+                // Clamp to prevent scrolling past boundaries
+                new_start = new_start.max(0.0);
+                if new_start > max_timeline_start {
+                    new_start = max_timeline_start;
+                }
+                
+                if (new_start - current_start).abs() > 0.001 {
+                    timeline_api.shift_timeline_start(new_start - current_start);
                 }
             }
         }
@@ -50,7 +66,7 @@ pub fn handle_scroll_and_zoom(
 pub fn handle_track_playhead_interaction(
     ui: &mut egui::Ui,
     tracks: &TracksCtx,
-    playhead_api: Option<&mut dyn PlayheadApi>,
+    playhead_api: Option<&dyn PlayheadApi>,
 ) {
     if let Some(api) = playhead_api {
         let timeline_rect = tracks.timeline.full_rect;
@@ -74,4 +90,124 @@ pub fn handle_track_playhead_interaction(
             }
         }
     }
+}
+
+/// Handle clicks and drags on a specific track for selection and playhead.
+pub fn handle_track_interaction(
+    ui: &mut egui::Ui,
+    track_rect: egui::Rect, // The actual track area (for pointer detection)
+    timeline_rect: egui::Rect, // The full timeline area (for tick calculation)
+    track_id: &str,
+    playhead_api: Option<&dyn PlayheadApi>,
+    selection_api: Option<&dyn TrackSelectionApi>,
+) {
+    let timeline_w = timeline_rect.width();
+    
+    let ticks_per_point = if let Some(ref api) = playhead_api {
+        api.ticks_per_point()
+    } else if let Some(ref api) = selection_api {
+        api.ticks_per_point()
+    } else {
+        return;
+    };
+    
+    let visible_ticks = ticks_per_point * timeline_w;
+
+    let pointer_pressed = ui.input(|i| i.pointer.primary_pressed());
+    let pointer_released = ui.input(|i| i.pointer.primary_released());
+    let pointer_down = ui.input(|i| i.pointer.primary_down());
+    let secondary_pressed = ui.input(|i| i.pointer.secondary_pressed());
+    let pointer_pos = ui.input(|i| i.pointer.interact_pos());
+    // Check if pointer is over the actual track area (not the full timeline)
+    let pointer_over_track = pointer_pos
+        .map(|pos| track_rect.contains(pos))
+        .unwrap_or(false);
+    // Check if pointer is over the timeline area (for right-click deselection)
+    let pointer_over_timeline = pointer_pos
+        .map(|pos| timeline_rect.contains(pos))
+        .unwrap_or(false);
+
+    // Check if we're currently dragging on this track
+    let is_dragging_this_track = if let Some(api) = selection_api {
+        if let Some((drag_track_id, _)) = api.get_drag_start() {
+            drag_track_id == track_id
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+
+    if let Some(pt) = pointer_pos {
+        // Calculate tick based on position in timeline (not track)
+        let tick = (((pt.x - timeline_rect.min.x) / timeline_w) * visible_ticks).max(0.0);
+
+        // Handle playhead (always update on click/drag, but not on right-click)
+        if let Some(api) = playhead_api {
+            if ((pointer_pressed && pointer_over_track) || (pointer_down && pointer_over_track)) && !secondary_pressed {
+                api.set_playhead_ticks(tick);
+            }
+        }
+
+        // Handle selection
+        if let Some(api) = selection_api {
+            // Right mouse button click - deselect all tracks (works anywhere in timeline area)
+            if secondary_pressed && pointer_over_timeline {
+                api.clear_all_selections();
+            } else if pointer_pressed && pointer_over_track && !secondary_pressed {
+                // Start drag - ONLY if click is inside the track area
+                // Clear all previous selections first, then store absolute start position
+                api.clear_all_selections();
+                let timeline_start = api.timeline_start();
+                let absolute_start_tick = timeline_start + tick;
+                api.start_selection_drag(track_id, absolute_start_tick);
+            } else if pointer_down && is_dragging_this_track && !secondary_pressed {
+                // Continue drag - allow dragging even if pointer goes outside track
+                // Update end position (absolute) - clamp tick to valid range
+                let timeline_start = api.timeline_start();
+                let clamped_tick = tick.max(0.0).min(visible_ticks);
+                let absolute_end_tick = timeline_start + clamped_tick;
+                api.update_selection_drag(track_id, absolute_end_tick);
+            } else if pointer_released {
+                // End drag - check if it was a click or drag
+                if is_dragging_this_track {
+                    if let Some((_, absolute_start_tick)) = api.get_drag_start() {
+                        let timeline_start = api.timeline_start();
+                        // Use current tick position, clamped to valid range
+                        let clamped_tick = if pointer_over_timeline { tick } else {
+                            // If released outside timeline, use the last valid position
+                            (absolute_start_tick - timeline_start).max(0.0).min(visible_ticks)
+                        };
+                        let absolute_end_tick = timeline_start + clamped_tick.max(0.0).min(visible_ticks);
+                        let drag_distance = (absolute_end_tick - absolute_start_tick).abs();
+                        if drag_distance < 1.0 {
+                            // Click (no significant drag) - clear all selections
+                            api.clear_all_selections();
+                        } else {
+                            // Drag - set selection (absolute ticks) on this track
+                            // Clear all first to ensure only one selection exists
+                            api.clear_all_selections();
+                            api.set_selection(track_id, absolute_start_tick.min(absolute_end_tick), absolute_start_tick.max(absolute_end_tick));
+                        }
+                        api.end_selection_drag();
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// API for track selection functionality.
+pub trait TrackSelectionApi {
+    fn ticks_per_point(&self) -> f32;
+    fn timeline_start(&self) -> f32;
+    fn start_selection_drag(&self, track_id: &str, start_tick: f32);
+    fn update_selection_drag(&self, track_id: &str, end_tick: f32);
+    fn get_drag_start(&self) -> Option<(String, f32)>;
+    fn end_selection_drag(&self);
+    fn set_selection(&self, track_id: &str, start_tick: f32, end_tick: f32);
+    fn clear_selection(&self, track_id: &str);
+    fn clear_all_selections(&self);
+    fn get_selection(&self, track_id: &str) -> Option<(f32, f32)>;
+    fn get_selected_track_id(&self) -> Option<String>;
 }

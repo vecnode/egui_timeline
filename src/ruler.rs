@@ -10,6 +10,11 @@ pub trait MusicalInfo {
     fn ticks_per_point(&self) -> f32 {
         self.ticks_per_beat() as f32 / 16.0
     }
+    /// Get the current timeline start position in ticks (for calculating absolute bar numbers).
+    /// Returns None if not available.
+    fn timeline_start(&self) -> Option<f32> {
+        None
+    }
 }
 
 /// Respond to when the user clicks on the ruler.
@@ -24,21 +29,12 @@ pub trait MusicalRuler {
     fn interact(&mut self) -> &mut dyn MusicalInteract;
 }
 
-/// Instantiate a musical ruler widget, showing bars and meters.
-///
-/// The ruler is positioned so that tick 0 always aligns with the left edge of the timeline area
-/// (where the header ends). This ensures the ruler stays "glued" to the left edge.
 pub fn musical(ui: &mut egui::Ui, api: &mut dyn MusicalRuler) -> egui::Response {
-    // Allocate space for the ruler.
-    // Use the full available width to ensure it aligns with the timeline area.
-    // The rect.min.x will be at the timeline's left edge (where header ends).
     let h = ui.spacing().interact_size.y;
     let w = ui.available_rect_before_wrap().width();
     let desired_size = egui::Vec2::new(w, h);
     let (rect, mut response) = ui.allocate_exact_size(desired_size, egui::Sense::click_and_drag());
 
-    // Check for clicks (on mouse down).
-    // Position calculations use rect.min.x as the base, ensuring tick 0 is at the left edge.
     let w = rect.width();
     let ticks_per_point = api.info().ticks_per_point();
     let visible_ticks = w * ticks_per_point;
@@ -56,10 +52,10 @@ pub fn musical(ui: &mut egui::Ui, api: &mut dyn MusicalRuler) -> egui::Response 
         }
     }
 
-    // Time to draw things.
     let vis = ui.style().noninteractive();
+    // Note: Pink border is drawn by the track's show() method to include header + timeline
+    // No need to draw border here as it would only cover the timeline area
 
-    // Draw each of the step lines.
     let mut stroke = vis.fg_stroke;
     let bar_color = stroke.color.linear_multiply(0.5);
     let step_color = stroke.color.linear_multiply(0.125);
@@ -67,10 +63,11 @@ pub fn musical(ui: &mut egui::Ui, api: &mut dyn MusicalRuler) -> egui::Response 
     let step_even_y = rect.top() + rect.height() * 0.25;
     let step_odd_y = rect.top() + rect.height() * 0.125;
 
-    // Iterate over the steps of the ruler to draw them.
     let visible_len = w;
     let info = api.info();
-        let mut steps = Steps::new(info, visible_len, crate::types::MIN_STEP_GAP);
+    let mut steps = Steps::new(info, visible_len, crate::types::MIN_STEP_GAP);
+    let mut last_bar_start: Option<f32> = None;
+    
     while let Some(step) = steps.next(info) {
         let (y, color) = match step.index_in_bar {
             0 => (bar_y, bar_color),
@@ -78,12 +75,52 @@ pub fn musical(ui: &mut egui::Ui, api: &mut dyn MusicalRuler) -> egui::Response 
             _ => (step_odd_y, step_color),
         };
         stroke.color = color;
-        // Position step lines relative to rect.left() (timeline's left edge).
-        // When step.x = 0 (tick 0), the line is at rect.left(), keeping it glued to the left edge.
         let x = rect.left() + step.x;
         let a = egui::Pos2::new(x, rect.top());
         let b = egui::Pos2::new(x, y);
         ui.painter().line_segment([a, b], stroke);
+        
+        if step.index_in_bar == 0 {
+            let bar = info.bar_at_ticks(step.ticks);
+            let is_new_bar = match last_bar_start {
+                Some(last_start) => (bar.tick_range.start - last_start).abs() > 0.1,
+                None => true,
+            };
+            
+            if is_new_bar {
+                last_bar_start = Some(bar.tick_range.start);
+                let ticks_per_bar = bar.tick_range.end - bar.tick_range.start;
+                if ticks_per_bar > 0.0 {
+                    let bar_number = if let Some(timeline_start) = info.timeline_start() {
+                        let absolute_tick = timeline_start + step.ticks;
+                        (absolute_tick / ticks_per_bar).floor() as u32
+                    } else {
+                        let estimated_bar = (step.ticks / ticks_per_bar).floor();
+                        let estimated_timeline_start = (estimated_bar * ticks_per_bar) - bar.tick_range.start;
+                        let absolute_tick = estimated_timeline_start + step.ticks;
+                        (absolute_tick / ticks_per_bar).floor() as u32
+                    };
+                    let bar_number = bar_number.min(500);
+                    
+                    const MIN_LEFT_MARGIN: f32 = 20.0;
+                    const MIN_RIGHT_MARGIN: f32 = 30.0;
+                    let text = format!("{}", bar_number);
+                    let estimated_text_width = text.len() as f32 * 6.0;
+                    let fits_left = x >= rect.left() + MIN_LEFT_MARGIN;
+                    let fits_right = x + estimated_text_width <= rect.right() - MIN_RIGHT_MARGIN;
+                    
+                    if fits_left && fits_right {
+                        let text_color = vis.fg_stroke.color;
+                        let text_pos = egui::Pos2::new(x + 2.0, rect.center().y);
+                        let default_font_size = ui.style().text_styles.get(&egui::TextStyle::Body)
+                            .map(|f| f.size)
+                            .unwrap_or(14.0);
+                        let small_font = egui::FontId::new(default_font_size * 0.75, egui::FontFamily::Proportional);
+                        ui.painter().text(text_pos, egui::Align2::LEFT_CENTER, text, small_font, text_color);
+                    }
+                }
+            }
+        }
     }
 
     response

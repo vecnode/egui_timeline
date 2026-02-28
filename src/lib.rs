@@ -15,6 +15,7 @@ pub use ruler::MusicalRuler;
 pub use context::SetPlayhead;
 pub use timeline::{Show, Timeline};
 pub use types::{Bar, TimeSig};
+pub use interaction::TrackSelectionApi;
 
 // Re-export TimelineApi trait
 pub use timeline_api::TimelineApi;

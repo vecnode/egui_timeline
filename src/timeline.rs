@@ -153,10 +153,12 @@ impl Show {
     /// timeline.
     ///
     /// If `playhead_api` is provided, clicking and dragging on the timeline area of tracks will set the playhead position.
+    /// If `selection_api` is provided, clicking and dragging on tracks will create selections.
     pub fn tracks(
         mut self,
-        tracks_fn: impl FnOnce(&TracksCtx, egui::Rect, &mut egui::Ui),
-        playhead_api: Option<&mut dyn PlayheadApi>,
+        tracks_fn: impl FnOnce(&TracksCtx, egui::Rect, &mut egui::Ui, Option<&dyn PlayheadApi>, Option<&dyn crate::interaction::TrackSelectionApi>),
+        playhead_api: Option<&dyn PlayheadApi>,
+        selection_api: Option<&dyn crate::interaction::TrackSelectionApi>,
     ) -> SetPlayhead {
         let Self {
             ref mut ui,
@@ -171,10 +173,7 @@ impl Show {
             .animated(true)
             .stick_to_bottom(true) // stick to new tracks as they're added
             .show_viewport(ui, |ui, view| {
-                tracks_fn(tracks, view, ui);
-
-                // Handle clicks and drags on timeline area to set playhead
-                interaction::handle_track_playhead_interaction(ui, tracks, playhead_api);
+                tracks_fn(tracks, view, ui, playhead_api, selection_api);
             });
         let timeline_rect = tracks.timeline.full_rect;
         let tracks_bottom = res
