@@ -102,8 +102,14 @@ pub fn set(
     let ticks_per_point = api.ticks_per_point();
     let visible_ticks = ticks_per_point * timeline_w;
 
-    // Handle interactions.
-    if response.clicked() || response.dragged() {
+    // Handle interactions (on mouse down).
+    let pointer_pressed = ui.input(|i| i.pointer.primary_pressed());
+    let pointer_over = ui.input(|i| {
+        i.pointer.hover_pos()
+            .map(|pos| rect.contains(pos))
+            .unwrap_or(false)
+    });
+    if (pointer_pressed && pointer_over) || response.dragged() {
         if let Some(pt) = response.interact_pointer_pos() {
             let tick = (((pt.x - timeline_rect.min.x) / timeline_w) * visible_ticks).max(0.0);
             api.set_playhead_ticks(tick);
@@ -124,3 +130,4 @@ pub fn set(
 
     response
 }
+

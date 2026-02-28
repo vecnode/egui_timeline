@@ -1,4 +1,4 @@
-use super::Bar;
+use crate::types::Bar;
 
 /// Access to musical information required by the timeline.
 pub trait MusicalInfo {
@@ -32,11 +32,17 @@ pub fn musical(ui: &mut egui::Ui, api: &mut dyn MusicalRuler) -> egui::Response 
     let desired_size = egui::Vec2::new(w, h);
     let (rect, mut response) = ui.allocate_exact_size(desired_size, egui::Sense::click_and_drag());
 
-    // Check for clicks.
+    // Check for clicks (on mouse down).
     let w = rect.width();
     let ticks_per_point = api.info().ticks_per_point();
     let visible_ticks = w * ticks_per_point;
-    if response.clicked() || response.dragged() {
+    let pointer_pressed = ui.input(|i| i.pointer.primary_pressed());
+    let pointer_over = ui.input(|i| {
+        i.pointer.hover_pos()
+            .map(|pos| rect.contains(pos))
+            .unwrap_or(false)
+    });
+    if (pointer_pressed && pointer_over) || response.dragged() {
         if let Some(pt) = response.interact_pointer_pos() {
             let tick = (((pt.x - rect.min.x) / w) * visible_ticks).max(0.0);
             api.interact().click_at_tick(tick);
@@ -58,7 +64,7 @@ pub fn musical(ui: &mut egui::Ui, api: &mut dyn MusicalRuler) -> egui::Response 
     // Iterate over the steps of the ruler to draw them.
     let visible_len = w;
     let info = api.info();
-    let mut steps = Steps::new(info, visible_len, super::MIN_STEP_GAP);
+        let mut steps = Steps::new(info, visible_len, crate::types::MIN_STEP_GAP);
     while let Some(step) = steps.next(info) {
         let (y, color) = match step.index_in_bar {
             0 => (bar_y, bar_color),
