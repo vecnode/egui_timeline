@@ -25,14 +25,20 @@ pub trait MusicalRuler {
 }
 
 /// Instantiate a musical ruler widget, showing bars and meters.
+///
+/// The ruler is positioned so that tick 0 always aligns with the left edge of the timeline area
+/// (where the header ends). This ensures the ruler stays "glued" to the left edge.
 pub fn musical(ui: &mut egui::Ui, api: &mut dyn MusicalRuler) -> egui::Response {
     // Allocate space for the ruler.
+    // Use the full available width to ensure it aligns with the timeline area.
+    // The rect.min.x will be at the timeline's left edge (where header ends).
     let h = ui.spacing().interact_size.y;
-    let w = ui.available_width();
+    let w = ui.available_rect_before_wrap().width();
     let desired_size = egui::Vec2::new(w, h);
     let (rect, mut response) = ui.allocate_exact_size(desired_size, egui::Sense::click_and_drag());
 
     // Check for clicks (on mouse down).
+    // Position calculations use rect.min.x as the base, ensuring tick 0 is at the left edge.
     let w = rect.width();
     let ticks_per_point = api.info().ticks_per_point();
     let visible_ticks = w * ticks_per_point;
@@ -72,6 +78,8 @@ pub fn musical(ui: &mut egui::Ui, api: &mut dyn MusicalRuler) -> egui::Response 
             _ => (step_odd_y, step_color),
         };
         stroke.color = color;
+        // Position step lines relative to rect.left() (timeline's left edge).
+        // When step.x = 0 (tick 0), the line is at rect.left(), keeping it glued to the left edge.
         let x = rect.left() + step.x;
         let a = egui::Pos2::new(x, rect.top());
         let b = egui::Pos2::new(x, y);
