@@ -208,7 +208,10 @@ impl SetPlayhead {
     /// Display time in the top panel.
     /// 
     /// `playhead_api` should provide access to the current playhead position.
-    pub fn top_panel_time(&self, ui: &mut egui::Ui, playhead_api: Option<&dyn crate::playhead::PlayheadApi>) -> &Self {
+    /// Show the time in the top panel.
+    /// `playhead_api` should provide access to the current playhead position.
+    /// `is_playing` should be a mutable reference to a bool that tracks play/stop state (true = Play, false = Stop).
+    pub fn top_panel_time(&self, ui: &mut egui::Ui, playhead_api: Option<&dyn crate::playhead::PlayheadApi>, is_playing: &mut bool) -> &Self {
         if let Some(top_panel_rect) = self.top_panel_rect {
             // Create UI for top panel to display time
             let mut top_panel_ui = ui.new_child(
@@ -217,8 +220,30 @@ impl SetPlayhead {
                     .layout(egui::Layout::top_down(egui::Align::Min)),
             );
             
-            // Display time in top right corner
-            top_panel_ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            // Add 2px top padding
+            top_panel_ui.add_space(2.0);
+            
+            // Layout: buttons on left, time on right
+            top_panel_ui.horizontal(|ui| {
+                // Left side: Play and Stop buttons
+                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    ui.add_space(4.0); // Left padding
+                    
+                    // Play button
+                    if ui.selectable_label(*is_playing, "Play").clicked() {
+                        *is_playing = true;
+                    }
+                    
+                    ui.add_space(4.0); // Spacing between buttons
+                    
+                    // Stop button
+                    if ui.selectable_label(!*is_playing, "Stop").clicked() {
+                        *is_playing = false;
+                    }
+                });
+                
+                // Right side: Time display
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if let Some(api) = playhead_api {
                     // Get current playhead position in ticks (absolute from timeline start at 0)
                     // playhead_ticks() returns relative ticks from timeline start (scroll position)
@@ -250,6 +275,7 @@ impl SetPlayhead {
                     // Fallback if no playhead API
                     ui.label("00:00:00");
                 }
+                });
             });
         }
         self

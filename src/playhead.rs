@@ -119,10 +119,12 @@ pub fn set(
 
     // Draw a thin vertical line (not a rect with stroke to avoid double lines at edges).
     if timeline_rect.x_range().contains(playhead_x) {
-        let visuals = ui.style().interact(&response);
+        // Use a specific color for the playhead instead of the default interactive color (which is red)
+        // Using a blue color that's visible but distinct from other UI elements
+        let playhead_color = egui::Color32::from_rgb(150, 150, 150); // Light blue
         let stroke = egui::Stroke {
             width: 1.0,
-            ..visuals.fg_stroke
+            color: playhead_color,
         };
         // Draw only a vertical line instead of a rect to avoid double vertical lines at edges
         let top_pos = egui::Pos2::new(playhead_x, top);

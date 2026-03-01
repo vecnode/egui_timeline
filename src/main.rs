@@ -28,16 +28,80 @@ struct TimelineApp {
     track_selections: RefCell<HashMap<String, (f32, f32)>>, // track_id -> (start_tick, end_tick)
     drag_start_tick: RefCell<Option<(String, f32)>>, // (track_id, start_tick) when dragging
     track_names: RefCell<HashMap<String, String>>, // track_id -> track_name
+    is_playing: RefCell<bool>, // true = Play selected, false = Stop selected
+    play_start_time: RefCell<Option<f64>>, // Timestamp when play started (egui time)
+    play_start_playhead_pos: RefCell<f32>, // Playhead position (absolute ticks) when play started
 }
 
 impl TimelineApp {
     /// Total number of bars (0-500 inclusive = 501 bars)
     const TOTAL_BARS: u32 = 501;
     
+    /// Target frame rate for smooth playhead animation
+    const TARGET_FPS: f64 = 60.0;
+    
     /// Calculate ticks per bar
     fn ticks_per_bar(&self) -> f32 {
         let beats_per_bar = 4.0; // 4/4 time signature
         self.ticks_per_beat as f32 * beats_per_bar
+    }
+    
+    /// Calculate ticks per second (1 bar = 1 second)
+    fn ticks_per_second(&self) -> f32 {
+        self.ticks_per_bar()
+    }
+    
+    /// Get maximum playhead position (end of bar 500)
+    fn max_playhead_pos(&self) -> f32 {
+        Self::TOTAL_BARS as f32 * self.ticks_per_bar()
+    }
+    
+    /// Update playhead position based on playback state
+    /// Called at the start of each frame to update playhead if playing
+    /// Uses time-based calculation for frame-rate independent, smooth animation
+    fn update_playhead_position(&self, ctx: &egui::Context) {
+        let is_playing = *self.is_playing.borrow();
+        
+        if is_playing {
+            let current_time = ctx.input(|i| i.time);
+            let mut play_start_time = self.play_start_time.borrow_mut();
+            let mut play_start_playhead_pos = self.play_start_playhead_pos.borrow_mut();
+            
+            // Initialize play start time and position if not set
+            if play_start_time.is_none() {
+                *play_start_time = Some(current_time);
+                *play_start_playhead_pos = *self.playhead_pos.borrow();
+            }
+            
+            // Calculate elapsed time since play started
+            if let Some(start_time) = *play_start_time {
+                let elapsed_seconds = (current_time - start_time) as f32;
+                
+                // Calculate new playhead position: start position + elapsed time in ticks
+                let ticks_per_second = self.ticks_per_second();
+                let new_pos = *play_start_playhead_pos + (elapsed_seconds * ticks_per_second);
+                
+                // Clamp to maximum position (end of bar 500)
+                let max_pos = self.max_playhead_pos();
+                let clamped_pos = new_pos.min(max_pos);
+                
+                // Update playhead position
+                *self.playhead_pos.borrow_mut() = clamped_pos;
+                
+                // Request continuous repaints for smooth animation at target FPS
+                // This creates a continuous animation loop while playing
+                ctx.request_repaint_after(std::time::Duration::from_secs_f64(1.0 / Self::TARGET_FPS));
+                
+                // If we reached the end, stop playback automatically
+                if clamped_pos >= max_pos {
+                    *self.is_playing.borrow_mut() = false;
+                    *play_start_time = None;
+                }
+            }
+        } else {
+            // Not playing: clear play start time so it reinitializes on next play
+            *self.play_start_time.borrow_mut() = None;
+        }
     }
 }
 
@@ -57,6 +121,9 @@ impl Default for TimelineApp {
                 names.insert("track2".to_string(), "Track 2".to_string());
                 names
             }),
+            is_playing: RefCell::new(false), // Start with Stop selected
+            play_start_time: RefCell::new(None),
+            play_start_playhead_pos: RefCell::new(0.0),
         }
     }
 }
@@ -138,7 +205,16 @@ impl Info for TimelineApp {
 
 impl Interaction for TimelineApp {
     fn set_playhead_ticks(&self, ticks: f32) {
-        *self.playhead_pos.borrow_mut() = self.timeline_start + ticks;
+        let new_pos = self.timeline_start + ticks;
+        *self.playhead_pos.borrow_mut() = new_pos;
+        
+        // If playing and user drags playhead, reset play start to continue from new position
+        // We'll handle this in update_playhead_position by checking if play_start_time is None
+        if *self.is_playing.borrow() {
+            *self.play_start_playhead_pos.borrow_mut() = new_pos;
+            // Reset play start time so it reinitializes with current time on next update
+            *self.play_start_time.borrow_mut() = None;
+        }
     }
 }
 
@@ -196,6 +272,9 @@ impl TrackSelectionApi for TimelineApp {
 
 impl eframe::App for TimelineApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Update playhead position if playing (before rendering)
+        self.update_playhead_position(ctx);
+        
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.vertical_centered(|ui| {
                 ui.heading("egui_timeline Demo");
@@ -307,7 +386,7 @@ impl eframe::App for TimelineApp {
                     Some(self as &dyn TrackSelectionApi),
                 )
                 .playhead(ui, self, Playhead::new())
-                .top_panel_time(ui, Some(self as &dyn PlayheadApi))
+                .top_panel_time(ui, Some(self as &dyn PlayheadApi), &mut *self.is_playing.borrow_mut())
                 .bottom_bar(ui, &mut self.global_panel_visible);
 
             ui.add_space(10.0);
