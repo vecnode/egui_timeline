@@ -193,12 +193,29 @@ impl<'a> TrackCtx<'a> {
         );
         
         // Draw a pink border around the entire track (header + timeline) to visualize its boundaries
-        // This applies to all tracks including the ruler
+        // For the ruler (track_id is None), draw full border. For regular tracks, skip top border to avoid double border.
         let pink_border = egui::Stroke {
             width: 1.0,
             color: egui::Color32::from_rgb(255, 192, 203), // Pink
         };
-        self.ui.painter().rect_stroke(full_track_rect, 0.0, pink_border);
+        
+        if self.track_id.is_none() {
+            // Ruler: draw full border
+            self.ui.painter().rect_stroke(full_track_rect, 0.0, pink_border);
+        } else {
+            // Regular tracks: draw left, right, and bottom borders only (skip top to avoid double border with ruler)
+            let left_top = egui::Pos2::new(full_track_rect.min.x, full_track_rect.min.y);
+            let right_top = egui::Pos2::new(full_track_rect.max.x, full_track_rect.min.y);
+            let left_bottom = egui::Pos2::new(full_track_rect.min.x, full_track_rect.max.y);
+            let right_bottom = egui::Pos2::new(full_track_rect.max.x, full_track_rect.max.y);
+            
+            // Left border
+            self.ui.painter().line_segment([left_top, left_bottom], pink_border);
+            // Right border
+            self.ui.painter().line_segment([right_top, right_bottom], pink_border);
+            // Bottom border
+            self.ui.painter().line_segment([left_bottom, right_bottom], pink_border);
+        }
         
         // Manually add space occuppied by the child UIs, otherwise `ScrollArea` won't consider the
         // space occuppied. TODO: Is there a better way to handle this?

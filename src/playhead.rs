@@ -117,15 +117,17 @@ pub fn set(
         }
     }
 
-    // Draw a thin rect.
+    // Draw a thin vertical line (not a rect with stroke to avoid double lines at edges).
     if timeline_rect.x_range().contains(playhead_x) {
         let visuals = ui.style().interact(&response);
-        let radius = 0.0;
         let stroke = egui::Stroke {
-            width: 0.5,
+            width: 1.0,
             ..visuals.fg_stroke
         };
-        ui.painter().rect(rect, radius, visuals.bg_fill, stroke);
+        // Draw only a vertical line instead of a rect to avoid double vertical lines at edges
+        let top_pos = egui::Pos2::new(playhead_x, top);
+        let bottom_pos = egui::Pos2::new(playhead_x, bottom);
+        ui.painter().line_segment([top_pos, bottom_pos], stroke);
     }
 
     response

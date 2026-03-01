@@ -254,21 +254,10 @@ impl eframe::App for TimelineApp {
                             }
                         })
                             .show(
-                                |timeline, ui| {
-                                    let plot = timeline.plot_ticks("track1", 0.0..=1.0);
-                                    plot.show(ui, |plot_ui| {
-                                        // Add some example points
-                                        let points: Vec<[f64; 2]> = (0..10)
-                                            .map(|i| {
-                                                [
-                                                    (i as f64 * timeline.visible_ticks() as f64 / 10.0),
-                                                    (i as f64 % 3.0) / 3.0,
-                                                ]
-                                            })
-                                            .collect();
-                                        let line = egui_plot::Line::new(points);
-                                        plot_ui.line(line);
-                                    });
+                                |_timeline, ui| {
+                                    // Track content area - ready for custom track data rendering
+                                    // Allocate 40px height to ensure track is interactive for selection
+                                    ui.add_space(40.0);
                                 },
                                 playhead_api,
                                 selection_api,
@@ -305,20 +294,10 @@ impl eframe::App for TimelineApp {
                             }
                         })
                             .show(
-                                |timeline, ui| {
-                                    let plot = timeline.plot_ticks("track2", 0.0..=1.0);
-                                    plot.show(ui, |plot_ui| {
-                                        let points: Vec<[f64; 2]> = (0..15)
-                                            .map(|i| {
-                                                [
-                                                    (i as f64 * timeline.visible_ticks() as f64 / 15.0),
-                                                    ((i as f64 * 0.7) % 1.0),
-                                                ]
-                                            })
-                                            .collect();
-                                        let line = egui_plot::Line::new(points);
-                                        plot_ui.line(line);
-                                    });
+                                |_timeline, ui| {
+                                    // Track content area - ready for custom track data rendering
+                                    // Allocate 40px height to ensure track is interactive for selection
+                                    ui.add_space(40.0);
                                 },
                                 playhead_api,
                                 selection_api,

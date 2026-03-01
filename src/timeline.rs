@@ -145,16 +145,6 @@ impl Show {
         // Use no spacing by default so we can get exact position for line separator.
         ui.scope(|ui| tracks_fn(tracks, ui));
 
-        // Draw a line to mark end of the pinned tracks.
-        let remaining = ui.available_rect_before_wrap();
-        let a = remaining.left_top();
-        let b = remaining.right_top();
-        let stroke = ui.style().visuals.noninteractive().bg_stroke;
-        ui.painter().line_segment([a, b], stroke);
-
-        // Add the exact space so the UI is aware.
-        ui.add_space(stroke.width);
-
         // Return to default spacing.
         let rect = ui.available_rect_before_wrap();
         self.ui.set_clip_rect(rect);

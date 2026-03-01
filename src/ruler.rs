@@ -1,6 +1,5 @@
 use crate::types::Bar;
 
-/// Access to musical information required by the timeline.
 pub trait MusicalInfo {
     /// The number of ticks per beat, also known as PPQN (parts per quarter note).
     fn ticks_per_beat(&self) -> u32;
@@ -30,9 +29,10 @@ pub trait MusicalRuler {
 }
 
 pub fn musical(ui: &mut egui::Ui, api: &mut dyn MusicalRuler) -> egui::Response {
-    let h = ui.spacing().interact_size.y;
+    // Use fixed height to match track height and prevent overflow
+    const RULER_HEIGHT: f32 = 20.0;
     let w = ui.available_rect_before_wrap().width();
-    let desired_size = egui::Vec2::new(w, h);
+    let desired_size = egui::Vec2::new(w, RULER_HEIGHT);
     let (rect, mut response) = ui.allocate_exact_size(desired_size, egui::Sense::click_and_drag());
 
     let w = rect.width();
