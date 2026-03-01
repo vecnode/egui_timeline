@@ -97,11 +97,14 @@ impl<'a> TrackCtx<'a> {
     }
 
     /// Set the track, with a function for instantiating contents for the timeline.
+    /// `on_track_click` is called when the full track area (header + content) is clicked.
     pub fn show(
         self,
         track: impl FnOnce(&TimelineCtx, &mut egui::Ui),
         playhead_api: Option<&dyn crate::playhead::PlayheadApi>,
         selection_api: Option<&dyn crate::interaction::TrackSelectionApi>,
+        on_track_click: Option<impl FnOnce(String)>,
+        is_selected: bool,
     ) {
         // The UI and area for the track timeline.
         let track_timeline_rect = {
@@ -191,6 +194,30 @@ impl<'a> TrackCtx<'a> {
                 self.available_rect.min.y + full_track_height, // Bottom of this track
             ),
         );
+        
+        if is_selected {
+            let selection_overlay = egui::Color32::from_rgba_unmultiplied(128, 128, 128, 5);
+            self.ui.painter().rect_filled(full_track_rect, 0.0, selection_overlay);
+        }
+        
+        // Handle track selection click (on full track area, 100% width and height)
+        if let Some(track_id) = &self.track_id {
+            if let Some(on_click) = on_track_click {
+                // Check if pointer clicked on the full track area
+                let pointer_pos = self.ui.input(|i| i.pointer.interact_pos());
+                let pointer_pressed = self.ui.input(|i| i.pointer.primary_pressed());
+                
+                if pointer_pressed {
+                    if let Some(pos) = pointer_pos {
+                        if full_track_rect.contains(pos) {
+                            // Select track on any click within the full track area (header + content)
+                            // This includes the input string area and the timeline content area
+                            on_click(track_id.clone());
+                        }
+                    }
+                }
+            }
+        }
         
         // Draw a pink border around the entire track (header + timeline) to visualize its boundaries
         // For the ruler (track_id is None), draw full border. For regular tracks, skip top border to avoid double border.

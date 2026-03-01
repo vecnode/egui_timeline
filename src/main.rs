@@ -28,6 +28,9 @@ struct TimelineApp {
     track_selections: RefCell<HashMap<String, (f32, f32)>>, // track_id -> (start_tick, end_tick)
     drag_start_tick: RefCell<Option<(String, f32)>>, // (track_id, start_tick) when dragging
     track_names: RefCell<HashMap<String, String>>, // track_id -> track_name
+    track_ids: RefCell<Vec<String>>, // Ordered list of track IDs
+    pending_add_track: RefCell<bool>, // Flag to add a track on next frame
+    selected_track_id: RefCell<Option<String>>, // Currently selected track ID
     is_playing: RefCell<bool>, // true = Play selected, false = Stop selected
     play_start_time: RefCell<Option<f64>>, // Timestamp when play started (egui time)
     play_start_playhead_pos: RefCell<f32>, // Playhead position (absolute ticks) when play started
@@ -54,6 +57,58 @@ impl TimelineApp {
     /// Get maximum playhead position (end of bar 500)
     fn max_playhead_pos(&self) -> f32 {
         Self::TOTAL_BARS as f32 * self.ticks_per_bar()
+    }
+    
+    /// Request to add a new track (will be processed on next frame)
+    fn request_add_track(&self) {
+        *self.pending_add_track.borrow_mut() = true;
+    }
+    
+    /// Process pending track addition (called at start of frame)
+    fn process_pending_add_track(&self) {
+        if *self.pending_add_track.borrow() {
+            *self.pending_add_track.borrow_mut() = false;
+            
+            let mut track_ids = self.track_ids.borrow_mut();
+            let mut track_names = self.track_names.borrow_mut();
+            
+            // Find the next available track number that doesn't have a duplicate name
+            let mut track_num = track_ids.len() + 1;
+            let mut new_track_name = format!("Track {}", track_num);
+            
+            // Check if the name already exists, if so, increment until we find a unique one
+            while track_names.values().any(|name| name == &new_track_name) {
+                track_num += 1;
+                new_track_name = format!("Track {}", track_num);
+            }
+            
+            // Generate new track ID
+            let new_track_id = format!("track{}", track_num);
+            
+            // Add to ordered list and name map
+            track_ids.push(new_track_id.clone());
+            track_names.insert(new_track_id, new_track_name);
+        }
+    }
+    
+    /// Remove the currently selected track
+    fn remove_selected_track(&self) {
+        let selected_id = self.selected_track_id.borrow().clone();
+        
+        if let Some(track_id) = selected_id {
+            // Remove from track_ids (ordered list)
+            let mut track_ids = self.track_ids.borrow_mut();
+            track_ids.retain(|id| id != &track_id);
+            
+            // Remove from track_names
+            self.track_names.borrow_mut().remove(&track_id);
+            
+            // Remove from track_selections
+            self.track_selections.borrow_mut().remove(&track_id);
+            
+            // Clear selection if the removed track was selected
+            *self.selected_track_id.borrow_mut() = None;
+        }
     }
     
     /// Update playhead position based on playback state
@@ -121,6 +176,9 @@ impl Default for TimelineApp {
                 names.insert("track2".to_string(), "Track 2".to_string());
                 names
             }),
+            track_ids: RefCell::new(vec!["track1".to_string(), "track2".to_string()]),
+            pending_add_track: RefCell::new(false),
+            selected_track_id: RefCell::new(None),
             is_playing: RefCell::new(false), // Start with Stop selected
             play_start_time: RefCell::new(None),
             play_start_playhead_pos: RefCell::new(0.0),
@@ -272,6 +330,9 @@ impl TrackSelectionApi for TimelineApp {
 
 impl eframe::App for TimelineApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Process pending track additions (before rendering)
+        self.process_pending_add_track();
+        
         // Update playhead position if playing (before rendering)
         self.update_playhead_position(ctx);
         
@@ -298,40 +359,59 @@ impl eframe::App for TimelineApp {
                         },
                         None,
                         None,
+                        None::<fn(String)>, // No track click handler for ruler
+                        false, // Ruler is never selected
                     );
                 })
                 .tracks(
                     |tracks, _viewport, ui, playhead_api, selection_api| {
-                    // Example track 1
-                    let track1_name = self.track_names.borrow().get("track1").cloned().unwrap_or_else(|| "Track 1".to_string());
-                    tracks.next(ui)
-                        .with_id("track1")
-                        .header(|ui| {
-                            ui.add_space(2.0); // Top padding
-                            let available_width = ui.available_width();
-                            let mut name = track1_name.clone();
-                            
-                            // Create TextEdit with frame disabled so it doesn't draw its own background
-                            let mut text_edit = egui::TextEdit::singleline(&mut name);
-                            text_edit = text_edit.desired_width(available_width * 0.5);
-                            text_edit = text_edit.frame(false); // Disable TextEdit's frame/background
-                            
-                            // Get the natural height that TextEdit would use
-                            let text_height = ui.text_style_height(&egui::TextStyle::Body);
-                            let input_size = egui::Vec2::new(available_width * 0.5, text_height + 4.0);
-                            
-                            // Allocate space and draw background (no border radius - 0.0)
-                            let (rect, _response) = ui.allocate_exact_size(input_size, egui::Sense::click());
-                            let dark_grey = egui::Color32::from_rgb(50, 50, 50);
-                            ui.painter().rect_filled(rect, 3.0, dark_grey);
-                            
-                            // Add TextEdit on top
-                            let text_response = ui.put(rect, text_edit);
-                            
-                            if text_response.changed() {
-                                self.track_names.borrow_mut().insert("track1".to_string(), name);
-                            }
-                        })
+                    // Collect track data into local Vecs to drop RefCell borrows early
+                    // This prevents borrow conflicts when the "Add Track" button is clicked
+                    let track_ids_vec: Vec<String> = {
+                        let track_ids = self.track_ids.borrow();
+                        track_ids.clone()
+                    };
+                    let track_names_map: HashMap<String, String> = {
+                        let track_names = self.track_names.borrow();
+                        track_names.clone()
+                    };
+                    
+                    // Get selected track ID before the loop
+                    let selected_track_id = self.selected_track_id.borrow().clone();
+                    
+                    for track_id in track_ids_vec.iter() {
+                        let track_name = track_names_map.get(track_id).cloned().unwrap_or_else(|| format!("Track {}", track_id));
+                        let track_id_clone = track_id.clone();
+                        let is_selected = selected_track_id.as_ref() == Some(track_id);
+                        
+                        tracks.next(ui)
+                            .with_id(track_id_clone.as_str())
+                            .header(|ui| {
+                                ui.add_space(2.0); // Top padding
+                                let available_width = ui.available_width();
+                                let mut name = track_name.clone();
+                                
+                                // Create TextEdit with frame disabled so it doesn't draw its own background
+                                let mut text_edit = egui::TextEdit::singleline(&mut name);
+                                text_edit = text_edit.desired_width(available_width * 0.5);
+                                text_edit = text_edit.frame(false); // Disable TextEdit's frame/background
+                                
+                                // Get the natural height that TextEdit would use
+                                let text_height = ui.text_style_height(&egui::TextStyle::Body);
+                                let input_size = egui::Vec2::new(available_width * 0.5, text_height + 4.0);
+                                
+                                // Allocate space and draw background (no border radius - 0.0)
+                                let (rect, _response) = ui.allocate_exact_size(input_size, egui::Sense::click());
+                                let dark_grey = egui::Color32::from_rgb(50, 50, 50);
+                                ui.painter().rect_filled(rect, 3.0, dark_grey);
+                                
+                                // Add TextEdit on top
+                                let text_response = ui.put(rect, text_edit);
+                                
+                                if text_response.changed() {
+                                    self.track_names.borrow_mut().insert(track_id_clone.clone(), name);
+                                }
+                            })
                             .show(
                                 |_timeline, ui| {
                                     // Track content area - ready for custom track data rendering
@@ -340,63 +420,40 @@ impl eframe::App for TimelineApp {
                                 },
                                 playhead_api,
                                 selection_api,
+                                Some({
+                                    let selected_track_id_ref = &self.selected_track_id;
+                                    move |track_id: String| {
+                                        // Set this track as selected
+                                        *selected_track_id_ref.borrow_mut() = Some(track_id);
+                                    }
+                                }),
+                                is_selected,
                             );
-
-                    // Example track 2
-                    let track2_name = self.track_names.borrow().get("track2").cloned().unwrap_or_else(|| "Track 2".to_string());
-                    tracks.next(ui)
-                        .with_id("track2")
-                        .header(|ui| {
-                            ui.add_space(2.0); // Top padding
-                            let available_width = ui.available_width();
-                            let mut name = track2_name.clone();
-                            
-                            // Create TextEdit with frame disabled so it doesn't draw its own background
-                            let mut text_edit = egui::TextEdit::singleline(&mut name);
-                            text_edit = text_edit.desired_width(available_width * 0.5);
-                            text_edit = text_edit.frame(false); // Disable TextEdit's frame/background
-                            
-                            // Get the natural height that TextEdit would use
-                            let text_height = ui.text_style_height(&egui::TextStyle::Body);
-                            let input_size = egui::Vec2::new(available_width * 0.5, text_height + 4.0);
-                            
-                            // Allocate space and draw background (no border radius - 0.0)
-                            let (rect, _response) = ui.allocate_exact_size(input_size, egui::Sense::click());
-                            let dark_grey = egui::Color32::from_rgb(50, 50, 50);
-                            ui.painter().rect_filled(rect, 3.0, dark_grey);
-                            
-                            // Add TextEdit on top
-                            let text_response = ui.put(rect, text_edit);
-                            
-                            if text_response.changed() {
-                                self.track_names.borrow_mut().insert("track2".to_string(), name);
-                            }
-                        })
-                            .show(
-                                |_timeline, ui| {
-                                    // Track content area - ready for custom track data rendering
-                                    // Allocate 40px height to ensure track is interactive for selection
-                                    ui.add_space(40.0);
-                                },
-                                playhead_api,
-                                selection_api,
-                            );
+                    }
                     },
                     Some(self as &dyn PlayheadApi),
                     Some(self as &dyn TrackSelectionApi),
                 )
                 .playhead(ui, self, Playhead::new())
-                .top_panel_time(ui, Some(self as &dyn PlayheadApi), &mut *self.is_playing.borrow_mut())
+                .top_panel_time(
+                    ui,
+                    Some(self as &dyn PlayheadApi),
+                    || *self.is_playing.borrow(), // Get is_playing
+                    |val| *self.is_playing.borrow_mut() = val, // Set is_playing
+                    {
+                        // Get track count without holding borrow
+                        let count = self.track_ids.borrow().len();
+                        count
+                    }, // Track count
+                    self.max_playhead_pos(), // Maximum absolute playhead position (bar 500)
+                    || self.request_add_track(), // Add track callback
+                    || self.remove_selected_track(), // Remove track callback
+                    || self.selected_track_id.borrow().is_some(), // Has selected track
+                )
                 .bottom_bar(ui, &mut self.global_panel_visible);
 
-            ui.add_space(10.0);
-            ui.separator();
-            ui.horizontal(|ui| {
-                ui.label(format!("Timeline Start: {:.1} ticks", self.timeline_start));
-                ui.label(format!("Zoom: {:.2}x", self.zoom_level));
-                ui.label(format!("Playhead: {:.1} ticks", *self.playhead_pos.borrow()));
-            });
-            ui.label("Scroll horizontally to move timeline, Ctrl+Scroll to zoom, Click ruler to set playhead");
+
+            
         });
     }
 }

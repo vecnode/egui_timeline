@@ -210,8 +210,25 @@ impl SetPlayhead {
     /// `playhead_api` should provide access to the current playhead position.
     /// Show the time in the top panel.
     /// `playhead_api` should provide access to the current playhead position.
-    /// `is_playing` should be a mutable reference to a bool that tracks play/stop state (true = Play, false = Stop).
-    pub fn top_panel_time(&self, ui: &mut egui::Ui, playhead_api: Option<&dyn crate::playhead::PlayheadApi>, is_playing: &mut bool) -> &Self {
+    /// `get_is_playing` closure returns the current play state.
+    /// `set_is_playing` closure sets the play state.
+    /// `track_count` should be the number of tracks (excluding ruler).
+    /// `max_playhead_pos` is the maximum absolute playhead position (end of timeline).
+    /// `add_track_callback` closure is called when "Add Track" button is clicked.
+    /// `remove_track_callback` closure is called when "Remove Track" button is clicked.
+    /// `has_selected_track` closure returns whether a track is currently selected.
+    pub fn top_panel_time(
+        &self,
+        ui: &mut egui::Ui,
+        playhead_api: Option<&dyn crate::playhead::PlayheadApi>,
+        get_is_playing: impl Fn() -> bool,
+        mut set_is_playing: impl FnMut(bool),
+        track_count: usize,
+        max_playhead_pos: f32,
+        mut add_track_callback: impl FnMut(),
+        mut remove_track_callback: impl FnMut(),
+        has_selected_track: impl Fn() -> bool,
+    ) -> &Self {
         if let Some(top_panel_rect) = self.top_panel_rect {
             // Create UI for top panel to display time
             let mut top_panel_ui = ui.new_child(
@@ -226,20 +243,75 @@ impl SetPlayhead {
             // Layout: buttons on left, time on right
             top_panel_ui.horizontal(|ui| {
                 // Left side: Play and Stop buttons
-                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
                     ui.add_space(4.0); // Left padding
                     
-                    // Play button
-                    if ui.selectable_label(*is_playing, "Play").clicked() {
-                        *is_playing = true;
-                    }
-                    
-                    ui.add_space(4.0); // Spacing between buttons
-                    
-                    // Stop button
-                    if ui.selectable_label(!*is_playing, "Stop").clicked() {
-                        *is_playing = false;
-                    }
+                    ui.vertical(|ui| {
+                        // First line: Play, Stop, navigation, and Add Track buttons (horizontal)
+                        ui.horizontal(|ui| {
+                            let is_playing = get_is_playing();
+                            
+                            // Play button
+                            if ui.selectable_label(is_playing, "Play").clicked() {
+                                set_is_playing(true);
+                            }
+                            
+                            ui.add_space(4.0); // Spacing between buttons
+                            
+                            // Stop button
+                            if ui.selectable_label(!is_playing, "Stop").clicked() {
+                                set_is_playing(false);
+                            }
+                            
+                            ui.add_space(4.0); // Spacing
+                            
+                            // "<" button - set playhead to start (position 0)
+                            if ui.button("<").clicked() {
+                                if let Some(api) = playhead_api {
+                                    // Get current timeline_start (scroll offset) from the API
+                                    let timeline_start = api.timeline_start().unwrap_or(0.0);
+                                    // Calculate relative ticks to set absolute position to 0
+                                    // new_pos = timeline_start + ticks = 0, so ticks = -timeline_start
+                                    let ticks = -timeline_start;
+                                    if ticks.is_finite() {
+                                        api.set_playhead_ticks(ticks);
+                                    }
+                                }
+                            }
+                            
+                            ui.add_space(4.0); // Spacing
+                            
+                            // ">" button - set playhead to end (maximum position)
+                            if ui.button(">").clicked() {
+                                if let Some(api) = playhead_api {
+                                    // Get current timeline_start (scroll offset) from the API
+                                    let timeline_start = api.timeline_start().unwrap_or(0.0);
+                                    // Calculate relative ticks to set absolute position to max_playhead_pos
+                                    // new_pos = timeline_start + ticks = max_playhead_pos, so ticks = max_playhead_pos - timeline_start
+                                    let ticks = max_playhead_pos - timeline_start;
+                                    if ticks.is_finite() {
+                                        api.set_playhead_ticks(ticks);
+                                    }
+                                }
+                            }
+                            
+                            ui.add_space(4.0); // Spacing
+                            
+                            // Add Track button - shows track count
+                            if ui.button(format!("Add Track ({})", track_count)).clicked() {
+                                add_track_callback();
+                            }
+                            
+                            ui.add_space(4.0); // Spacing
+                            
+                            // Remove Track button - only enabled when a track is selected
+                            let has_selection = has_selected_track();
+                            if ui.add_enabled(has_selection, egui::Button::new("Remove Track")).clicked() {
+                                remove_track_callback();
+                            }
+                        });
+
+                    });
                 });
                 
                 // Right side: Time display
