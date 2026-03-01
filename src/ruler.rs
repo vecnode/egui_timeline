@@ -65,62 +65,115 @@ pub fn musical(ui: &mut egui::Ui, api: &mut dyn MusicalRuler) -> egui::Response 
 
     let visible_len = w;
     let info = api.info();
-    let mut steps = Steps::new(info, visible_len, crate::types::MIN_STEP_GAP);
-    let mut last_bar_start: Option<f32> = None;
+    let ticks_per_point = info.ticks_per_point();
+    let visible_ticks = ticks_per_point * visible_len;
     
-    while let Some(step) = steps.next(info) {
-        let (y, color) = match step.index_in_bar {
-            0 => (bar_y, bar_color),
-            n if n % 2 == 0 => (step_even_y, step_color),
-            _ => (step_odd_y, step_color),
-        };
-        stroke.color = color;
-        let x = rect.left() + step.x;
-        let a = egui::Pos2::new(x, rect.top());
-        let b = egui::Pos2::new(x, y);
-        ui.painter().line_segment([a, b], stroke);
+    // Calculate ticks per second (1 bar = 1 second) - same logic as grid
+    let ticks_per_beat = info.ticks_per_beat() as f32;
+    const BEATS_PER_BAR: f32 = 4.0; // 4/4 time signature
+    let ticks_per_bar = ticks_per_beat * BEATS_PER_BAR;
+    let ticks_per_second = ticks_per_bar; // 1 bar = 1 second
+    
+    // Maximum 10 lines per second = 0.1 second intervals - same as grid
+    const MAX_LINES_PER_SECOND: f32 = 10.0;
+    let ticks_per_line = ticks_per_second / MAX_LINES_PER_SECOND; // ticks per 0.1 second
+    
+    // Get timeline start to calculate absolute positions
+    let timeline_start = info.timeline_start().unwrap_or(0.0);
+    
+    // Calculate the starting tick for the visible area (relative to timeline start)
+    // The visible area starts at tick 0 relative to timeline_start
+    let start_tick_relative = 0.0;
+    
+    // Find the first line position (snap to 0.1 second intervals) - same as grid
+    // We need to find the first 0.1 second interval that's visible
+    // Convert relative start to absolute, then find the first interval
+    let absolute_start_tick = timeline_start + start_tick_relative;
+    let absolute_start_seconds = absolute_start_tick / ticks_per_second;
+    // Find the first 0.1 second interval that's >= absolute_start_seconds
+    let first_line_seconds = (absolute_start_seconds * MAX_LINES_PER_SECOND).floor() / MAX_LINES_PER_SECOND;
+    let first_line_absolute_tick = first_line_seconds * ticks_per_second;
+    // Convert back to relative tick
+    let first_line_tick_relative = first_line_absolute_tick - timeline_start;
+    
+    // Draw ruler lines using same logic as grid
+    let mut current_tick_relative = first_line_tick_relative;
+    let mut last_x = f32::NEG_INFINITY;
+    let mut last_bar_number_at_x: Option<(u32, f32)> = None; // Track (bar_number, x_position)
+    
+    while current_tick_relative <= visible_ticks {
+        // Convert relative tick to x position - same calculation as grid
+        let x = rect.left() + (current_tick_relative / ticks_per_point);
         
-        if step.index_in_bar == 0 {
-            let bar = info.bar_at_ticks(step.ticks);
-            let is_new_bar = match last_bar_start {
-                Some(last_start) => (bar.tick_range.start - last_start).abs() > 0.1,
-                None => true,
+        // Determine if this is a whole second (bar) or subdivision
+        let absolute_tick = timeline_start + current_tick_relative;
+        let seconds = absolute_tick / ticks_per_second;
+        let is_whole_second = (seconds % 1.0).abs() < 0.001;
+        
+        // Check if line is too close to the previous one (less than MIN_STEP_GAP pixels)
+        let line_too_close = (x - last_x).abs() < crate::types::MIN_STEP_GAP && last_x != f32::NEG_INFINITY;
+        
+        // Draw the line with appropriate style (skip subdivisions if too close, but always draw whole seconds)
+        if is_whole_second {
+            // Whole second (bar) - always draw the line, even if close (but might be shorter)
+            stroke.color = bar_color;
+            let a = egui::Pos2::new(x, rect.top());
+            let b = egui::Pos2::new(x, bar_y);
+            ui.painter().line_segment([a, b], stroke);
+            
+            // Draw bar number - always try to draw if it's a different bar or at a different x position
+            let bar_number = seconds.floor() as u32;
+            let bar_number = bar_number.min(500);
+            
+            // Draw if it's a new bar number OR if it's at a significantly different x position
+            // This ensures numbers show up even when zooming changes the spacing
+            let should_draw_number = match last_bar_number_at_x {
+                None => true, // First bar number
+                Some((last_bar, last_x_pos)) => {
+                    // Draw if different bar number OR if x position changed significantly (more than 5px)
+                    bar_number != last_bar || (x - last_x_pos).abs() > 5.0
+                }
             };
             
-            if is_new_bar {
-                last_bar_start = Some(bar.tick_range.start);
-                let ticks_per_bar = bar.tick_range.end - bar.tick_range.start;
-                if ticks_per_bar > 0.0 {
-                    let bar_number = if let Some(timeline_start) = info.timeline_start() {
-                        let absolute_tick = timeline_start + step.ticks;
-                        (absolute_tick / ticks_per_bar).floor() as u32
-                    } else {
-                        let estimated_bar = (step.ticks / ticks_per_bar).floor();
-                        let estimated_timeline_start = (estimated_bar * ticks_per_bar) - bar.tick_range.start;
-                        let absolute_tick = estimated_timeline_start + step.ticks;
-                        (absolute_tick / ticks_per_bar).floor() as u32
-                    };
-                    let bar_number = bar_number.min(500);
-                    
-                    const MIN_LEFT_MARGIN: f32 = 20.0;
-                    const MIN_RIGHT_MARGIN: f32 = 30.0;
-                    let text = format!("{}", bar_number);
-                    let estimated_text_width = text.len() as f32 * 6.0;
-                    let fits_left = x >= rect.left() + MIN_LEFT_MARGIN;
-                    let fits_right = x + estimated_text_width <= rect.right() - MIN_RIGHT_MARGIN;
-                    
-                    if fits_left && fits_right {
-                        let text_color = vis.fg_stroke.color;
-                        let text_pos = egui::Pos2::new(x + 2.0, rect.center().y);
-                        let default_font_size = ui.style().text_styles.get(&egui::TextStyle::Body)
-                            .map(|f| f.size)
-                            .unwrap_or(14.0);
-                        let small_font = egui::FontId::new(default_font_size * 0.75, egui::FontFamily::Proportional);
-                        ui.painter().text(text_pos, egui::Align2::LEFT_CENTER, text, small_font, text_color);
-                    }
+            if should_draw_number {
+                const MIN_LEFT_MARGIN: f32 = 20.0;
+                const MIN_RIGHT_MARGIN: f32 = 30.0;
+                let text = format!("{}", bar_number);
+                let estimated_text_width = text.len() as f32 * 6.0;
+                let fits_left = x >= rect.left() + MIN_LEFT_MARGIN;
+                let fits_right = x + estimated_text_width <= rect.right() - MIN_RIGHT_MARGIN;
+                
+                if fits_left && fits_right {
+                    let text_color = vis.fg_stroke.color;
+                    let text_pos = egui::Pos2::new(x + 2.0, rect.center().y);
+                    let default_font_size = ui.style().text_styles.get(&egui::TextStyle::Body)
+                        .map(|f| f.size)
+                        .unwrap_or(14.0);
+                    let small_font = egui::FontId::new(default_font_size * 0.75, egui::FontFamily::Proportional);
+                    ui.painter().text(text_pos, egui::Align2::LEFT_CENTER, text, small_font, text_color);
+                    last_bar_number_at_x = Some((bar_number, x));
                 }
             }
+        } else if !line_too_close {
+            // Subdivision (0.1 second) - only draw if not too close
+            stroke.color = step_color;
+            // Alternate between step_even_y and step_odd_y for visual distinction
+            let subdivision_index = ((seconds * MAX_LINES_PER_SECOND) % MAX_LINES_PER_SECOND).floor() as usize;
+            let y = if subdivision_index % 2 == 0 {
+                step_even_y
+            } else {
+                step_odd_y
+            };
+            let a = egui::Pos2::new(x, rect.top());
+            let b = egui::Pos2::new(x, y);
+            ui.painter().line_segment([a, b], stroke);
         }
+        
+        // Update last_x only if we actually drew a line (or it's a whole second)
+        if !line_too_close || is_whole_second {
+            last_x = x;
+        }
+        current_tick_relative += ticks_per_line;
     }
 
     response

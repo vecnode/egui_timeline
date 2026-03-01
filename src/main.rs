@@ -77,7 +77,7 @@ impl TimelineApi for TimelineApp {
     }
 
     fn zoom(&mut self, y_delta: f32) {
-        self.zoom_level = (self.zoom_level * (1.0 + y_delta * 0.01)).max(0.1).min(10.0);
+        self.zoom_level = (self.zoom_level * (1.0 + y_delta * 0.01)).max(0.1).min(3.0);
     }
 }
 
